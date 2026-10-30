@@ -112,8 +112,16 @@ Alternatively, split by year (derived from `date` when needed):
 python3 split_allele_table_by_metadata.py \
   --input allele_table.txt \
   --metadata metadata.csv \
-  --variable year
+  --variable year \
+  --outdir allele_tables_by_year
 ```
+
+**Running in the workstation**:
+
+```bash
+python3 split_allele_table_by_metadata.py --input allele_table.txt --metadata metadata.csv --variable province --outdir allele_tables_by_province 
+```
+
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -132,13 +140,12 @@ Rscript run_coi.R \
   --input allele_tables_by_province \
   --output coi_output \
   --threshold 0.98 \
-  --count_reference
 ```
 
-The output directory is optional, and the threshold defaults to `0.98`:
+**Running in the workstation** (default: 0.98):
 
 ```bash
-Rscript run_coi.R --input allele_table.txt
+Rscript run_coi.R --input allele_table.txt --output Coi_output --threshold 0.98
 ```
 
 | Argument | Required | Description |
@@ -164,13 +171,6 @@ Rscript run_coi.R --input allele_table.txt
 ### 3. Estimate pairwise relatedness using Dcifer
 
 The simplest run lets Dcifer estimate allele frequencies from the data; the wrapper also calculates a naive COI:
-
-```bash
-Rscript run_dcifer.R \
-  --input allele_table.txt \
-  --output dcifer_output \
-  --threads 4
-```
 
 **Use the COI estimates from `run_coi.R`:**
 
@@ -202,6 +202,12 @@ Rscript run_dcifer.R \
   --pop_col district \
   --output dcifer_by_district \
   --threads 4
+```
+
+**Running in the workstation** (in the background):
+
+```bash
+nohup Rscript run_dcifer.R --input allele_tables_by_district --output Dcifer_output   --allele_freq Moire_output --coi COI_tables/ --threads 4 &
 ```
 
 | Argument | Required | Description |
@@ -273,8 +279,6 @@ Rscript run_dcifer.R \
   --threads 4
 ```
 
-**Scope of comparisons:** Splitting first and running Dcifer on each group produces **within-group comparisons only**. To compare samples **across groups**, use the **original, unsplit allele table** with `--metadata` and `--pop_col` instead.
-
 ## Troubleshooting
 
 - **Missing column:** Check the headers. The Python script requires an exact sample-column match; the R scripts accept normalized aliases.
@@ -290,4 +294,4 @@ For a complete list of command-line options, use `python3 split_allele_table_by_
 
 - [Dcifer](https://github.com/EPPIcenter/dcifer) — identity-by-descent-based genetic relatedness for polyclonal infections.
 - [PGEcore](https://plasmogenepi.github.io/PGEcore/) — standardised wrappers and input/output formats for malaria genomics analyses.
-- MOIRE — optional source of allele-frequency and COI estimates. This repository's `run_dcifer.R` supports MOIRE results, but the MOIRE runner is not among the three scripts documented here.
+- MOIRE — optional source of allele-frequency
