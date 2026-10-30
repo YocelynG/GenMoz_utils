@@ -1,4 +1,4 @@
-# Allele-table utilities: population splitting, COI and Dcifer relatedness
+# Genomic Surveillance utilities: population splitting, COI and Dcifer relatedness
 
 Command-line scripts for processing malaria amplicon allele tables: split samples into metadata-defined groups, estimate read-based **complexity of infection (COI)**, and calculate **between-host genetic relatedness (IBD)** using [Dcifer](https://github.com/EPPIcenter/dcifer) through [PGEcore](https://github.com/PlasmoGenEpi/PGEcore).
 
