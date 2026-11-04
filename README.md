@@ -6,7 +6,7 @@ Command-line scripts for processing malaria amplicon allele tables: split sample
 
 | Script | Purpose | Input | Main output |
 | --- | --- | --- | --- |
-| `screen_sample_repetitions.py` | Finds samples sequenced in more than one run and keep only the best sample among the duplicates | Allele table + Batch file | `allele_table |
+| `screen_sample_repetitions.py` | Finds samples sequenced in more than one run and keep only the best sample among the duplicates | Allele table + Batch file | `allele_table` |
 | `split_allele_table_by_metadata.py` | Divide a single allele table by a metadata variable (e.g., province, district or year) | Allele table + sample metadata | `allele_table_<group>_filtered.txt` per group |
 | `run_coi.R` | Estimate read-based COI from the number of alleles required to cover a selected fraction of reads | One allele table or a directory | `<input_stem>_COI_Table.txt` |
 | `run_dcifer.R` | Estimate pairwise between-host relatedness with Dcifer | Allele table(s); optional COI, allele frequencies and/or metadata | `<input_stem>_Dcifer_IBD_Results.txt` and reproducible intermediate files |
