@@ -6,6 +6,7 @@ Command-line scripts for processing malaria amplicon allele tables: split sample
 
 | Script | Purpose | Input | Main output |
 | --- | --- | --- | --- |
+| `screen_sample_repetitions.py` | Finds samples sequenced in more than one run and keep only the best sample among the duplicates | Allele table + Batch file | `allele_table |
 | `split_allele_table_by_metadata.py` | Divide a single allele table by a metadata variable (e.g., province, district or year) | Allele table + sample metadata | `allele_table_<group>_filtered.txt` per group |
 | `run_coi.R` | Estimate read-based COI from the number of alleles required to cover a selected fraction of reads | One allele table or a directory | `<input_stem>_COI_Table.txt` |
 | `run_dcifer.R` | Estimate pairwise between-host relatedness with Dcifer | Allele table(s); optional COI, allele frequencies and/or metadata | `<input_stem>_Dcifer_IBD_Results.txt` and reproducible intermediate files |
@@ -14,6 +15,94 @@ Command-line scripts for processing malaria amplicon allele tables: split sample
 ## Requirements and installation
 
 Use a terminal with **Python 3** and **R** (accessible as `python3` and `Rscript`). For current `dcifer` releases, **R 4.4+** is recommended/required by the package; check the version requirements of the version you install
+
+
+### `screen_sample_repetitions.py`
+
+Finds samples sequenced in more than one run, reports their depth in each run, and can write an allele table with those samples merged, cut to their best run, or renamed.
+
+## Prerequisites
+
+- Python 3.9 or newer
+- pandas (`pip install pandas` or `conda install pandas`)
+
+## Inputs
+
+Column names are matched ignoring case, so `SampleID` = `sampleID` and `Reads` = `reads`.
+
+**`--alleles`:** the allele table (`.txt`, `.tsv`, `.csv`, optionally `.gz`).
+- **Required columns:** the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`), `locus` and `reads`.
+- **Optional columns:** `Run`, `asv`, `NIDA`, `norm.reads.locus` and `n.alleles`.
+
+** `--manifest`:** file containing the sample names and a column with the batch information (library or plate name)
+- **Columns:** the ID (`SampleID`, `sample_id`, `sample_name`, `sample`, `NIDA` or `id`) and the run (`Run` or `Batch`; `Run` is used if both are present).
+- **No header:** the first column is the ID and the second is the run.
+
+```
+SampleID        Batch
+2076817.1       Lib1
+2076817.1       Lib2
+```
+
+## Options
+
+| Option | Description |
+|---|---|
+| `--alleles FILE` | Allele table (required) |
+| `--manifest FILE` | Samples and batch file (required) |
+| `--out FILE` | Screening table (required) |
+| `--out-alleles FILE` | Also write the allele table with one of the three options below applied |
+| `--best_coverage TRUE` | Keep only the best run of each sample |
+| `--keep_dups TRUE` | Keep every run and add `_a`, `_b`, ... to the IDs (`a` = best run) |
+| `--merge TRUE` | Combine each sample's runs into one, adding up the reads |
+| `--min-depth N` | Reads a locus must exceed to count as covered (default 100) |
+| `--all` | Also list samples in only one run in the screening table |
+
+- **One option at a time:** use only one of `--best_coverage`, `--keep_dups` and `--merge`.
+- **Best run:** the run with the most loci above `--min-depth` reads
+- **`--keep_dups`:** the letter goes after `_S*_L001` in `sampleID` and at the end of `NIDA`
+- **`--merge`:** needs an `asv` column, because allele names are numbered separately in each run. Downstream, match alleles by `asv`.
+
+```bash
+python3 screen_sample_repetitions.py --alleles allele_table.txt --manifest manifest.csv \
+    --out screening.tsv 
+```
+
+**With options for duplicate samples**, --best_coverage TRUE: keep the sample with the best coverage
+
+```bash
+python3 screen_sample_repetitions.py --alleles allele_table.txt --manifest manifest.csv \
+    --out screening.tsv --best_coverage TRUE --out-alleles allele_table_best_run.txt
+```
+
+## Outputs
+
+**Screening table (`--out`):** one row per sample and run, best run first.
+
+| Column | Meaning |
+|---|---|
+| `SampleID` | Standardised ID |
+| `Run` | Sequencing run |
+| `Raw_SampleID` | ID as written in the allele table |
+| `N_Runs` | Number of runs the sample is in |
+| `Total_Reads` | Reads over all loci |
+| `Total_Loci` | Loci with at least one read |
+| `Avg_Reads_per_Locus` | `Total_Reads` / `Total_Loci` |
+| `Depth_Read_Loci` | Loci with more than `--min-depth` reads |
+| `Best_Run` | `yes` / `no` (with `--merge`: name of the best run) |
+| `New_SampleID` | Only with `--keep_dups`: the ID with its letter |
+
+With `--best_coverage`, only the best row of each sample is kept. With `--merge`, each sample has one row, and its runs are listed best first, separated by `;`.
+
+**Allele table (`--out-alleles`):** Remove duplicate samples, keeping only one or renaming duplicates
+
+| Option | Change in the allele table |
+|---|---|
+| `--best_coverage` | Sample with the best read depth coverage is retained |
+| `--keep_dups` | All duplicate samples are kept, and IDs get `_a`, `_b`, ... |
+| `--merge` | Reads are summed and `norm.reads.locus` and `n.alleles` recalculated. `Run` lists all runs. 
+
+
 
 ### `split_allele_table_by_metadata.py`
 
