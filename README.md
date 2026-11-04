@@ -17,18 +17,76 @@ Command-line scripts for processing malaria amplicon allele tables: split sample
 Use a terminal with **Python 3** and **R** (accessible as `python3` and `Rscript`). For current `dcifer` releases, **R 4.4+** is recommended/required by the package; check the version requirements of the version you install
 
 
-### `screen_sample_repetitions.py`
-
-Finds samples sequenced in more than one run, reports their depth in each run, and can write an allele table with those samples merged, cut to their best run, or renamed.
-
-## Prerequisites
+### Prerequisites: `screen_sample_repetitions.py`
 
 - Python 3.9 or newer
 - pandas (`pip install pandas` or `conda install pandas`)
 
-## Inputs
+
+### Prerequisites: `split_allele_table_by_metadata.py`
+
+- Python 3.9+
+- Python package: `pandas`
+
+### Prerequisites:  `run_coi.R`
+
+- R
+- R packages: `optparse`, `dplyr`, `tibble` (`tibble` is used explicitly in the code)
+
+### Prerequisites: `run_dcifer.R`
+
+- R (compatible with your installed `dcifer` version)
+- R packages: `optparse`, `dplyr`, `tibble`, `PGEcore`, `dcifer`, `foreach`, `iterators`, `doParallel`, `parallelly`
+- Multiple CPU workers if using `--threads` greater than 1
+
+
+`PGEcore` does **not** automatically install the specialised `dcifer` package; install both. See [PGEcore installation instructions](https://plasmogenepi.github.io/PGEcore/articles/getting-started.html).
+
+Check availability before running:
+
+```bash
+Rscript -e 'stopifnot(all(vapply(c("optparse", "dplyr", "tibble", "PGEcore", "dcifer", "foreach", "iterators", "doParallel", "parallelly"), requireNamespace, logical(1), quietly=TRUE)))'
+```
+
+## Input file formats
+
+All three scripts accept **comma- or tab-separated** allele tables (including `.txt`, `.tsv` and `.csv`). They detect delimiters from the header instead of relying on the extension
+
+### Allele tables generated with Mad4HaTter 
+
+Example (tab-separated):
+
+```text
+SampleID	Locus	PseudoCIGAR	Reads
+S01	LocusA	.	80
+S01	LocusA	2A>G	20
+S01	LocusB	.	100
+S02	LocusA	.	100
+
+
+### Metadata
+
+For the splitting script, metadata must contain the same sample-ID column as the allele table and a column named by `--variable`. For Dcifer population mode, metadata must contain `SampleID` (or its normalized equivalent) and the specified `--pop_col` (default: `district`).
+
+Example:
+
+```text
+SampleID,province,district,date
+S01,Province_A,District_1,2022-03-17
+S02,Province_B,District_2,2023-05-10
+```
+
+Metadata should have one row per sample.
+
+## Usage
+
+### 1. `screen_sample_repetitions.py`
+
+Finds samples sequenced in more than one run, reports their depth in each run, and can write an allele table with those samples merged, cut to their best run, or renamed.
 
 Column names are matched ignoring case, so `SampleID` = `sampleID` and `Reads` = `reads`.
+
+**Inputs**
 
 **`--alleles`:** the allele table (`.txt`, `.tsv`, `.csv`, optionally `.gz`).
 - **Required columns:** the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`), `locus` and `reads`.
@@ -103,89 +161,28 @@ With `--best_coverage`, only the best row of each sample is kept. With `--merge`
 | `--merge` | Reads are summed and `norm.reads.locus` and `n.alleles` recalculated. `Run` lists all runs. 
 
 
+### 2. Split allele tables by metadata
 
-### `split_allele_table_by_metadata.py`
+| Argument | Required | Description |
+| --- | --- | --- |
+| `-i`, `--input` | Yes | Allele file or directory of `allele*` files |
+| `-o`, `--output` | No | Output directory; defaults to input file's directory or the input directory |
+| `-t`, `--threshold` | No | Cumulative proportion of locus reads to cover, in `(0, 1]`; default `0.98` |
+| `--count_reference` | No | Treat `PseudoCIGAR` value `.` as a reference allele; otherwise exclude it |
+| `-h`, `--help` | No | Show help |
 
-- Python 3.9+
-- Python package: `pandas`
+**How COI is calculated:** within each sample/locus, reads for identical alleles are summed and alleles are ranked from most to least abundant. Alleles are retained until the cumulative read fraction reaches the threshold, **including the allele that crosses it**. The number retained is calculated for each locus; the sample's **COI is the maximum across loci**. The mean of the retained allele counts across represented loci is also reported.
 
-```bash
-python3 -m pip install pandas
-```
+**Output:** `<input_stem>_COI_Table.txt`, a tab-separated table containing:
 
-### `run_coi.R`
+| Column | Meaning |
+| --- | --- |
+| `SampleID` | Sample identifier |
+| `COI` | Maximum number of retained alleles among loci |
+| `avg_alleles_per_locus` | Mean number of retained alleles per represented locus |
 
-- R
-- R packages: `optparse`, `dplyr`, `tibble` (`tibble` is used explicitly in the code)
+**Important:** Without `--count_reference`, `.` is excluded as a missing allele. In some allele-table conventions `.` denotes the *reference* allele; specify the flag if that applies to your data. Samples with no alleles remaining are omitted from the COI output, with a warning.
 
-```bash
-Rscript -e 'install.packages(c("optparse", "dplyr", "tibble"))'
-```
-
-### `run_dcifer.R`
-
-- R (compatible with your installed `dcifer` version)
-- R packages: `optparse`, `dplyr`, `tibble`, `PGEcore`, `dcifer`, `foreach`, `iterators`, `doParallel`, `parallelly`
-- Multiple CPU workers if using `--threads` greater than 1
-
-```bash
-Rscript -e 'install.packages(c("optparse", "dplyr", "tibble", "foreach", "iterators", "doParallel", "parallelly"))'
-Rscript -e 'install.packages("dcifer", repos=c("https://plasmogenepi.r-universe.dev", "https://cloud.r-project.org"))'
-Rscript -e 'if (!requireNamespace("pak", quietly=TRUE)) install.packages("pak"); pak::pak("PlasmoGenEpi/PGEcore")'
-```
-
-`PGEcore` does **not** automatically install the specialised `dcifer` package; install both. See [PGEcore installation instructions](https://plasmogenepi.github.io/PGEcore/articles/getting-started.html).
-
-Check availability before running:
-
-```bash
-Rscript -e 'stopifnot(all(vapply(c("optparse", "dplyr", "tibble", "PGEcore", "dcifer", "foreach", "iterators", "doParallel", "parallelly"), requireNamespace, logical(1), quietly=TRUE)))'
-```
-
-## Input file formats
-
-### Allele tables
-
-All three scripts accept **comma- or tab-separated** allele tables (including `.txt`, `.tsv` and `.csv`). They detect delimiters from the header instead of relying on the extension.
-
-Example (tab-separated):
-
-```text
-SampleID	Locus	PseudoCIGAR	Reads
-S01	LocusA	.	80
-S01	LocusA	2A>G	20
-S01	LocusB	.	100
-S02	LocusA	.	100
-```
-
-| Column | Split script | COI script | Dcifer script |
-| --- | --- | --- | --- |
-| `SampleID` | Required (unless overridden by `--sample-col`) | Required | Required |
-| `Locus` | Not needed for splitting | Required | Required |
-| `PseudoCIGAR` | Not needed for splitting | Required | Required |
-| `Reads` | Not needed for splitting | Required; must be numeric | Ignored (allele presence/absence is used) |
-
-The split script preserves all allele-table columns and uses the **exact** specified sample-column name. The R scripts normalize names (case-insensitive, ignoring punctuation/underscores), so `sample_id`, `sampleID` and `SampleID` are equivalent; similarly `pseudo_cigar` and `PseudoCIGAR` are equivalent.
-
-When you provide a **directory** to an R script, it only processes files starting with `allele` (case-insensitive) and ending in `.txt`, `.tsv` or `.csv`. A **single explicitly named file** does not have this filename restriction. The R scripts skip several recognised results-file suffixes when scanning input directories.
-
-### Metadata
-
-For the splitting script, metadata must contain the same sample-ID column as the allele table and a column named by `--variable`. For Dcifer population mode, metadata must contain `SampleID` (or its normalized equivalent) and the specified `--pop_col` (default: `district`).
-
-Example:
-
-```text
-SampleID,province,district,date
-S01,Province_A,District_1,2022-03-17
-S02,Province_B,District_2,2023-05-10
-```
-
-Metadata should have one row per sample. The Python splitting script **rejects duplicate sample IDs**. If splitting by `year` and no `year` column exists, it extracts the first four-digit year from `date`.
-
-## Usage
-
-### 1. Split allele tables by metadata
 
 ```bash
 python3 split_allele_table_by_metadata.py \
@@ -211,31 +208,7 @@ python3 split_allele_table_by_metadata.py \
 python3 split_allele_table_by_metadata.py --input allele_table.txt --metadata metadata.csv --variable province --outdir allele_tables_by_province 
 ```
 
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `--input` | Yes | Allele table file |
-| `--metadata` | Yes | Metadata file |
-| `--variable` | Yes | Metadata column defining the groups |
-| `--outdir` | No | Output directory; defaults to `allele_tables_by_<variable>` next to input |
-| `--sample-col` | No | Sample ID column name in both files; default `SampleID` |
-
-**Output:** one file per nonempty group with allele rows, named `allele_table_<group>_filtered.txt` (for example, `allele_table_Province_A_filtered.txt`). Group names are sanitized for filenames. The script reports the number of samples and rows written, warns about missing group values and samples without allele data, and excludes allele-table samples absent from metadata. It does **not** aggregate or filter alleles based on read count.
-
-### 2. Estimate complexity of infection (COI)
-
-```bash
-Rscript run_coi.R \
-  --input allele_tables_by_province \
-  --output coi_output \
-  --threshold 0.98 \
-```
-
-**Running in the workstation** (default: 0.98):
-
-```bash
-Rscript run_coi.R --input allele_table.txt --output Coi_output --threshold 0.98
-```
+### 3. Estimate complexity of infection (COI)
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -257,47 +230,23 @@ Rscript run_coi.R --input allele_table.txt --output Coi_output --threshold 0.98
 
 **Important:** Without `--count_reference`, `.` is excluded as a missing allele. In some allele-table conventions `.` denotes the *reference* allele; specify the flag if that applies to your data. Samples with no alleles remaining are omitted from the COI output, with a warning.
 
-### 3. Estimate pairwise relatedness using Dcifer
-
-The simplest run lets Dcifer estimate allele frequencies from the data; the wrapper also calculates a naive COI:
-
-**Use the COI estimates from `run_coi.R`:**
 
 ```bash
-Rscript run_dcifer.R \
+Rscript run_coi.R \
   --input allele_tables_by_province \
-  --coi coi_output \
-  --output dcifer_output \
-  --threads 4
+  --output coi_output \
+  --threshold 0.98 \
 ```
 
-**Use MOIRE allele frequencies and COI** (requires matching files previously generated by `run_moire.R`, which is *not* included in this set of scripts):
+**Running in the workstation** (default: 0.98):
 
 ```bash
-Rscript run_dcifer.R \
-  --input allele_tables_by_province \
-  --allele_freq Moire_output \
-  --coi Moire_output \
-  --output dcifer_output \
-  --threads 4
+Rscript run_coi.R --input allele_table.txt --output Coi_output --threshold 0.98
 ```
 
-**Run population-aware analysis** using metadata. This estimates population-specific frequencies and considers within- and between-population pairs:
+### 4. Estimate pairwise relatedness using Dcifer
 
-```bash
-Rscript run_dcifer.R \
-  --input allele_table.txt \
-  --metadata metadata.csv \
-  --pop_col district \
-  --output dcifer_by_district \
-  --threads 4
-```
-
-**Running in the workstation** (in the background):
-
-```bash
-nohup Rscript run_dcifer.R --input allele_tables_by_district --output Dcifer_output   --allele_freq Moire_output --coi COI_tables/ --threads 4 &
-```
+Run Dcifer to estimate allele frequencies from the data and  also calculates a naive COI, or use allele frequencies and COI previously calculated  
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -340,6 +289,45 @@ dcifer_output/
     ├── allele_table_Province_A_filtered_coi.tsv
     ├── allele_table_Province_A_filtered_allele_freq.tsv  # if MOIRE AF supplied
     └── allele_table_Province_A_filtered_metadata.tsv     # if metadata supplied
+```
+
+**Use the COI estimates from `run_coi.R`:**
+
+
+```bash
+Rscript run_dcifer.R \
+  --input allele_tables_by_province \
+  --coi coi_output \
+  --output dcifer_output \
+  --threads 4
+```
+
+**Use MOIRE allele frequencies and COI** (requires matching files previously generated by `run_moire.R`, which is *not* included in this set of scripts):
+
+```bash
+Rscript run_dcifer.R \
+  --input allele_tables_by_province \
+  --allele_freq Moire_output \
+  --coi Moire_output \
+  --output dcifer_output \
+  --threads 4
+```
+
+**Run population-aware analysis** using metadata. This estimates population-specific frequencies and considers within- and between-population pairs:
+
+```bash
+Rscript run_dcifer.R \
+  --input allele_table.txt \
+  --metadata metadata.csv \
+  --pop_col district \
+  --output dcifer_by_district \
+  --threads 4
+```
+
+**Running in the workstation** (in the background):
+
+```bash
+nohup Rscript run_dcifer.R --input allele_tables_by_district --output Dcifer_output   --allele_freq Moire_output --coi COI_tables/ --threads 4 &
 ```
 
 ## Example end-to-end workflow
