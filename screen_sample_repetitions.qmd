@@ -1,0 +1,438 @@
+---
+title: "Screen sample repetitions"
+format:
+  html:
+    toc: true
+editor: visual
+---
+
+Finds samples sequenced in more than one run in a Mad4HaTter allele table and reports their depth in each run. It can also write an allele table in which those samples are merged, cut to their best run, or renamed. This is the R version of `screen_sample_repetitions.py`, and both give the same output files.
+
+**How to use:** edit the [Settings] chunk
+
+## Prerequisites
+
+-   R 4.1 or newer
+-   `data.table`, plus `R.utils` to read `.gz` files
+-   `DT`, for the interactive table in the report
+-   Quarto to render the report (RStudio includes it)
+
+```{r}
+#| label: packages
+library(data.table)
+```
+
+## Settings
+
+**Allele table (`ALLELE_FILE`):** a `.txt`, `.tsv` or `.csv` file, optionally `.gz`. Column names are matched ignoring case.
+
+-   **Required columns:** the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`), `locus` and `reads`.
+-   **`Run`:** tells which run each row comes from. Without it, each sequencing ID counts as its own run.
+-   **Optional columns:** `asv`, `norm.reads.locus` and `n.alleles`.
+
+**Manifests (`MANIFEST_FILES`):** one or more pipeline manifests, each with a `SampleID` or `sample_name` column and a `SampleType` column.
+
+-   **What gets screened:** only IDs with `SampleType = sample`. Controls and IDs not in a manifest are left unchanged.
+-   **Matching:** IDs are standardised first
+
+**Options:** set at most one of `MERGE`, `BEST_COVERAGE` and `KEEP_DUPS` to `TRUE`.
+
+-   **Best run:** the run with the most loci above `MIN_DEPTH` reads. Ties go to the run with more reads.
+-   **`KEEP_DUPS`:** the letter goes after `_S*_L001` in the sample ID and at the end of `NIDA`, for example `Sample0001_3_S59_L001_a` and `Sample0001.3_a`.
+-   **`MERGE`:** needs an `asv` column when the allele table is written, because allele names are numbered separately in each run.
+
+```{r}
+#| label: settings
+
+# ---- Input files -----------------------------------------------------------
+ALLELE_FILE    <- "allele_table.txt"   # allele table (.txt, .tsv or .csv, optionally .gz)
+MANIFEST_FILES <- c("manifest.csv")    # one or more, e.g. c("manifest_run1.csv", "manifest_run2.csv")
+ALLELES_ID_COL <- NULL                 # sample ID column, only if not SampleID, sample_id, sample_name or sample
+
+# ---- Output files ----------------------------------------------------------
+OUT_FILE         <- "screening.tsv"    # screening table (.csv gives commas, anything else tabs)
+OUT_ALLELES_FILE <- NULL               # allele table with the option below applied, e.g. "allele_table_best_run.txt"; NULL = not written
+
+# ---- Samples in more than one run: set at most one to TRUE ------------------
+MERGE         <- FALSE   # combine each sample's runs into one, adding up the reads
+BEST_COVERAGE <- FALSE   # keep only the best run of each sample
+KEEP_DUPS     <- FALSE   # keep every run and add _a, _b, ... to the IDs (a = best run)
+
+# ---- Screening -------------------------------------------------------------
+MIN_DEPTH <- 100     # reads a locus must exceed to count in Depth_Read_Loci
+SHOW_ALL  <- FALSE   # TRUE: also list samples in only one run in the screening table
+```
+
+## Functions
+
+These are the same steps as the functions in `screen_sample_repetitions.py`.
+
+```{r}
+#| label: functions
+
+# Column names are matched ignoring case (SampleID = sampleID, Reads = reads)
+ID_NAMES   <- c("sampleid", "sample_id", "sample_name", "sample")
+TYPE_NAMES <- c("sampletype", "sample_type")
+
+say <- function(...) cat(..., "\n", sep = "")
+
+shortlist <- function(x, n = 20) paste0(paste(head(x, n), collapse = ", "), if (length(x) > n) " ..." else "")
+
+# First column whose lower-case name is one of `candidates`, or the column `wanted`
+find_col <- function(df, candidates, wanted = NULL) {
+  if (!is.null(wanted)) {
+    if (!wanted %in% names(df)) stop("Column '", wanted, "' not found. Columns: ", toString(names(df)))
+    return(wanted)
+  }
+  hit <- match(candidates, tolower(names(df)))
+  hit <- hit[!is.na(hit)]
+  if (length(hit)) names(df)[hit[1]] else NULL
+}
+
+# Standardised sample ID, so every format of one sample matches:
+# N2076817-1_S3_L001, N2076817_1_S64__HFS23_NextSEQ01_271025, N2076817-1 -> 2076817.1
+normalise_id <- function(raw) {
+  u <- unique(raw)
+  s <- trimws(u)
+  s <- sub("__.*$", "", s)                  # __MULE_NextSEQ03_300725
+  s <- sub("_S[0-9]+(_L[0-9]+)?$", "", s)   # _S12_L001
+  base <- sub("^N?([0-9]+).*$", "\\1", s)
+  dec  <- sub("^N?[0-9]+[-_.]?", "", s)     # "" when there is no decimal
+  id <- ifelse(dec %in% c("", "0"), base, paste0(base, ".", dec))   # -0 / _0 means no decimal
+  # Non-numeric IDs (controls): N3D7-10K -> N3D7_10K
+  id <- ifelse(grepl("^N?[0-9]+([-_.][0-9]+)?$", s), id, gsub("-", "_", s, fixed = TRUE))
+  id[match(raw, u)]
+}
+
+# 0 -> a, 1 -> b, ..., 25 -> z, 26 -> aa
+letter <- function(rank) vapply(rank, function(r) {
+  s <- ""
+  n <- r + 1
+  while (n > 0) {
+    s <- paste0(letters[(n - 1) %% 26 + 1], s)
+    n <- (n - 1) %/% 26
+  }
+  s
+}, character(1))
+
+# Put tag right after _S12 / _S3_L001 if the ID has it, otherwise at the end:
+# N2076817_1_S64__HFS23_NextSEQ01_271025 -> N2076817_1_S64_a__HFS23_NextSEQ01_271025
+add_letter <- function(raw, tag) {
+  m <- regexpr("_S[0-9]+(?:_L[0-9]+)?(?=__|$)", raw, perl = TRUE)
+  cut <- ifelse(m > 0, m + attr(m, "match.length") - 1L, nchar(raw))
+  paste0(substr(raw, 1L, cut), tag, substring(raw, cut + 1L))
+}
+
+# Numbers written the way Python writes them (1408.03, 3.0, 0.808252427184466),
+# so the R and Python versions give the same files
+py_number <- function(x) {
+  out <- sprintf("%.15g", x)
+  for (d in 16:17) {
+    redo <- is.finite(x) & suppressWarnings(as.numeric(out)) != x
+    out[redo] <- sprintf(paste0("%.", d, "g"), x[redo])
+  }
+  whole <- !grepl("[.e]", out)
+  out[whole] <- paste0(out[whole], ".0")
+  out[is.na(x)] <- ""
+  out
+}
+
+read_table <- function(path) {
+  if (grepl("\\.xlsx?$", path, ignore.case = TRUE)) stop(path, ": save it as .csv or tab-separated .txt first.")
+  if (!file.exists(path)) stop("File not found: ", path)
+  con <- if (endsWith(path, ".gz")) gzfile(path, "rt") else file(path, "rt")
+  first <- readLines(con, n = 1L, warn = FALSE)
+  close(con)
+  # Every column as text, nothing turned into NA, spaces kept
+  fread(path, sep = if (grepl("\t", first, fixed = TRUE)) "\t" else ",", header = TRUE,
+        colClasses = "character", na.strings = NULL, strip.white = FALSE, showProgress = FALSE)
+}
+
+# .csv (or .csv.gz) gives commas, anything else tabs; a name ending in .gz is gzipped
+write_table <- function(df, path) {
+  df <- copy(df)
+  # Empty text is written as an empty field, as Python does (fwrite would write "")
+  for (col in names(df)) if (is.character(df[[col]])) set(df, which(df[[col]] == ""), col, NA_character_)
+  fwrite(df, path, sep = if (grepl("\\.csv$", sub("\\.gz$", "", tolower(path)))) "," else "\t",
+         quote = "auto", na = "", compress = "auto")
+}
+
+# Standardised ID and SampleType (lower case) of every row of the manifests
+read_manifests <- function(paths) {
+  man <- rbindlist(lapply(paths, function(path) {
+    df <- read_table(path)
+    sid <- find_col(df, ID_NAMES)
+    typ <- find_col(df, TYPE_NAMES)
+    if (is.null(sid) || is.null(typ))
+      stop(path, ": the manifest needs a SampleID (or sample_name) column and a SampleType column. Columns: ",
+           toString(names(df)))
+    part <- data.table(raw = trimws(df[[sid]]), SampleType = tolower(trimws(df[[typ]])))
+    part[raw != ""]
+  }))
+  man <- unique(man)
+  man[, SampleID := normalise_id(raw)]
+  man
+}
+
+# Reads, loci and deep loci for each group of per-locus read totals
+summarise_depth <- function(per_locus, keys, min_depth) {
+  s <- per_locus[, .(Total_Reads = sum(reads), Total_Loci = sum(reads > 0),
+                     Depth_Read_Loci = sum(reads > min_depth)), by = keys]
+  # Rounded as pandas rounds (half to even after multiplying by 100)
+  s[, Avg_Reads_per_Locus := round(Total_Reads / fifelse(Total_Loci > 0L, Total_Loci, NA_integer_) * 100) / 100]
+  s
+}
+
+# Allele table with each sample in several runs merged, cut to its best run, or relabelled.
+#   cn         column names in al: id, locus, reads, asv, run, nida, allele, norm, n_alleles (NULL if absent)
+#   links      row (in al), SampleID and Run of every allele row of a screened sample
+#   repeated_rows  rows left out when adding up reads (same sequence listed twice)
+#   ranks      SampleID, Run and Rank (0 = best run) of the samples in several runs
+resolve_alleles <- function(al, cn, links, repeated_rows, ranks, mode) {
+  dup <- merge(links, ranks, by = c("SampleID", "Run"))
+  if (mode == "best_coverage") {
+    keep <- !seq_len(nrow(al)) %in% dup[Rank > 0L, row]
+    return(al[keep])
+  }
+
+  if (mode == "keep_dups") {
+    out <- copy(al)
+    tag <- paste0("_", letter(dup$Rank))
+    for (col in unique(c(cn$id, cn$nida))) {
+      v <- out[[col]][dup$row]
+      set(out, i = dup$row, j = col, value = ifelse(v == "", v, add_letter(v, tag)))
+    }
+    return(out)
+  }
+
+  # merge: one row per sample, locus and sequence; the other columns come
+  # from the best run that has that sequence
+  use <- dup[!row %in% repeated_rows]
+  idx <- use$row
+  part <- al[idx]
+  part[, `:=`(tmp_sid = use$SampleID, tmp_rank = use$Rank, tmp_row = idx)]
+  reads_num <- suppressWarnings(as.numeric(part[[cn$reads]]))
+  set(part, j = "tmp_reads", value = fifelse(is.na(reads_num), 0, reads_num))
+  setorderv(part, c("tmp_sid", "tmp_rank", "tmp_row"))
+  keys <- c("tmp_sid", cn$locus, cn$asv)
+  sid_locus <- c("tmp_sid", cn$locus)
+  part[, tmp_total := sum(tmp_reads), by = keys]
+  # Keep each merged sample together, at the place of its first row
+  part[, tmp_p := min(tmp_row), by = "tmp_sid"]
+  part[, tmp_l := min(tmp_row), by = sid_locus]
+  m <- unique(part, by = keys)
+
+  set(m, j = cn$reads, value = ifelse(m$tmp_total == round(m$tmp_total), sprintf("%.0f", m$tmp_total),
+                                      py_number(m$tmp_total)))
+  m[, tmp_at := sum(tmp_total), by = sid_locus]
+  if (!is.null(cn$norm)) set(m, j = cn$norm, value = ifelse(m$tmp_at > 0, py_number(m$tmp_total / m$tmp_at), ""))
+  if (!is.null(cn$n_alleles)) m[, (cn$n_alleles) := as.character(.N), by = sid_locus]
+  best <- part[tmp_rank == 0L, .(best_id = get(cn$id)[1L]), by = "tmp_sid"]
+  set(m, j = cn$id, value = best$best_id[match(m$tmp_sid, best$tmp_sid)])
+  if (!is.null(cn$run)) {
+    runs <- ranks[order(Rank), .(runs = paste(Run, collapse = ";")), by = "SampleID"]
+    set(m, j = cn$run, value = runs$runs[match(m$tmp_sid, runs$SampleID)])
+  }
+  if (!is.null(cn$allele)) {
+    by_name <- c(sid_locus, cn$allele)
+    clash <- duplicated(m, by = by_name) | duplicated(m, by = by_name, fromLast = TRUE)
+    if (any(clash))
+      say("Note: ", uniqueN(m[clash], by = by_name), " allele names are used for two different sequences ",
+          "in the same merged sample, because each run numbers its alleles separately. ",
+          "Match alleles by asv, not by allele name.")
+  }
+
+  rest_rows <- setdiff(seq_len(nrow(al)), dup$row)
+  rest <- al[rest_rows]
+  rest[, `:=`(tmp_p = rest_rows, tmp_l = rest_rows, tmp_row = rest_rows)]
+  order_cols <- c("tmp_p", "tmp_l", "tmp_row")
+  out <- rbindlist(list(rest, m[, c(names(al), order_cols), with = FALSE]), use.names = TRUE)
+  setorderv(out, order_cols)
+  out[, (order_cols) := NULL]
+  out
+}
+```
+
+## 1. Check the settings
+
+```{r}
+#| label: check-settings
+modes <- c(merge = MERGE, best_coverage = BEST_COVERAGE, keep_dups = KEEP_DUPS)
+if (sum(modes) > 1) stop("Set only one of MERGE, BEST_COVERAGE and KEEP_DUPS to TRUE.")
+MODE <- if (any(modes)) names(modes)[modes] else "none"
+if (!is.null(OUT_ALLELES_FILE) && MODE == "none")
+  stop("OUT_ALLELES_FILE needs MERGE, BEST_COVERAGE or KEEP_DUPS set to TRUE.")
+full_path <- function(p) file.path(normalizePath(dirname(p), mustWork = FALSE), basename(p))
+inputs  <- full_path(c(ALLELE_FILE, MANIFEST_FILES))
+outputs <- full_path(c(OUT_FILE, OUT_ALLELES_FILE))
+if (any(outputs %in% inputs) || anyDuplicated(outputs))
+  stop("OUT_FILE and OUT_ALLELES_FILE must be different from each other and from the input files.")
+```
+
+## 2. Read the allele table
+
+```{r}
+#| label: read-alleles
+al <- read_table(ALLELE_FILE)
+id_col    <- find_col(al, ID_NAMES, ALLELES_ID_COL)
+locus_col <- find_col(al, "locus")
+reads_col <- find_col(al, "reads")
+run_col   <- find_col(al, "run")
+asv_col   <- find_col(al, "asv")
+if (is.null(id_col) || is.null(locus_col) || is.null(reads_col))
+  stop("The allele table needs sample ID, locus and reads columns. Columns: ", toString(names(al)))
+if (!is.null(OUT_ALLELES_FILE) && MODE == "merge" && is.null(asv_col))
+  stop("MERGE with OUT_ALLELES_FILE needs an asv column in the allele table to match alleles across runs ",
+       "(allele names are numbered separately in each run).")
+
+alleles <- data.table(row = seq_len(nrow(al)), raw = trimws(al[[id_col]]), locus = al[[locus_col]],
+                      reads = suppressWarnings(as.numeric(al[[reads_col]])))
+alleles[is.na(reads), reads := 0]
+# Without a Run column, each sequencing ID (e.g. N2076817-1_S3_L001) counts as its own run
+alleles[, Run := if (is.null(run_col)) raw else trimws(al[[run_col]])]
+if (!is.null(asv_col)) alleles[, asv := al[[asv_col]]]
+alleles[, SampleID := normalise_id(raw)]
+ids <- unique(alleles$SampleID)
+```
+
+## 3. Choose the samples from the manifests
+
+Only IDs with `SampleType = sample` are screened.
+
+```{r}
+#| label: manifest
+man <- read_manifests(MANIFEST_FILES)
+samples <- unique(man[SampleType == "sample", SampleID])
+mixed <- sort(intersect(samples, man[SampleType != "sample", SampleID]), method = "radix")
+not_in_manifest <- sort(setdiff(ids, man$SampleID), method = "radix")
+screened <- alleles[SampleID %in% samples]
+
+links <- screened[, .(row, SampleID, Run)]
+repeated_rows <- integer(0)
+if (!is.null(asv_col)) {
+  # The same sequence listed twice under two allele names would be counted twice
+  repeated <- duplicated(screened, by = c("raw", "Run", "locus", "asv"))
+  if (any(repeated)) say("Note: ignored ", sum(repeated), " repeated sequence rows (same sample, run, locus and asv).")
+  repeated_rows <- screened$row[repeated]
+  screened <- screened[!repeated]
+}
+```
+
+## 4. Depth of each sample in each run
+
+```{r}
+#| label: depth
+per_locus <- screened[, .(reads = sum(reads)), by = .(SampleID, Run, locus)]
+stats <- summarise_depth(per_locus, c("SampleID", "Run"), MIN_DEPTH)
+raw_ids <- screened[, .(Raw_SampleID = paste(sort(unique(raw), method = "radix"), collapse = ";")),
+                    by = .(SampleID, Run)]
+stats <- merge(stats, raw_ids, by = c("SampleID", "Run"))
+stats[, N_Runs := uniqueN(Run), by = SampleID]
+# Best run first: most Depth_Read_Loci, then most Total_Reads
+setorderv(stats, c("SampleID", "Depth_Read_Loci", "Total_Reads", "Run"), c(1L, -1L, -1L, 1L))
+stats[, Rank := seq_len(.N) - 1L, by = SampleID]
+stats[, Best_Run := fifelse(Rank == 0L, "yes", "no")]
+ranks <- stats[N_Runs > 1, .(SampleID, Run, Rank)]
+if (!SHOW_ALL) stats <- stats[N_Runs > 1]
+```
+
+## 5. Screening table
+
+| Column | Meaning |
+|------------------------------------|------------------------------------|
+| `SampleID` | Standardised ID |
+| `Run` | Sequencing run (the sequencing ID if the allele table has no `Run` column) |
+| `Raw_SampleID` | ID as written in the allele table |
+| `N_Runs` | Number of runs the sample is in |
+| `Total_Reads` | Reads over all loci |
+| `Total_Loci` | Loci with at least one read |
+| `Avg_Reads_per_Locus` | `Total_Reads` / `Total_Loci` |
+| `Depth_Read_Loci` | Loci with more than `MIN_DEPTH` reads |
+| `Best_Run` | `yes` / `no` (with `MERGE`: name of the best run) |
+| `New_SampleID` | Only with `KEEP_DUPS`: the ID with its letter |
+
+With `BEST_COVERAGE`, only the best row of each sample is kept. With `MERGE`, each sample has one row, and its runs are listed best first, separated by `;`.
+
+```{r}
+#| label: screening
+cols <- c("SampleID", "Run", "Raw_SampleID", "N_Runs", "Total_Reads", "Total_Loci",
+          "Avg_Reads_per_Locus", "Depth_Read_Loci", "Best_Run")
+if (MODE == "merge") {
+  # Add up each sample's reads per locus over its runs, then recount
+  pooled <- per_locus[SampleID %in% stats$SampleID, .(reads = sum(reads)), by = .(SampleID, locus)]
+  runs <- stats[, .(Run = paste(Run, collapse = ";"), Raw_SampleID = paste(Raw_SampleID, collapse = ";"),
+                    N_Runs = .N, Best_Run = Run[1]), by = SampleID]
+  stats <- merge(summarise_depth(pooled, "SampleID", MIN_DEPTH), runs, by = "SampleID")
+  setorderv(stats, "SampleID")
+} else if (MODE == "best_coverage") {
+  stats <- stats[Rank == 0L]
+} else if (MODE == "keep_dups") {
+  stats[, New_SampleID := paste0(SampleID, fifelse(N_Runs > 1, paste0("_", letter(Rank)), ""))]
+  cols <- c(cols, "New_SampleID")
+}
+screen <- stats[, ..cols]
+screen[, Total_Reads := sprintf("%.0f", round(Total_Reads))]
+screen[, Avg_Reads_per_Locus := py_number(Avg_Reads_per_Locus)]
+write_table(screen, OUT_FILE)
+
+if (is.null(run_col)) {
+  say("Allele table: ", length(ids), " IDs; no Run column, so each sequencing ID counts as its own run")
+} else {
+  say("Allele table: ", length(ids), " IDs in ", uniqueN(alleles$Run), " runs")
+}
+say("Screened: ", length(intersect(ids, samples)), " samples (SampleType = sample) | not screened: ",
+    length(intersect(ids, setdiff(man$SampleID, samples))), " controls or other types, ",
+    length(not_in_manifest), " not in the manifest")
+if (length(not_in_manifest))
+  say("Not in the manifest, so not screened (", length(not_in_manifest), "): ", shortlist(not_in_manifest))
+if (length(mixed))
+  say("Note: ", length(mixed), " IDs are 'sample' in one manifest row and another type in another; ",
+      "screened as samples: ", shortlist(mixed))
+missing <- sort(setdiff(samples, ids), method = "radix")
+if (length(missing)) say("Manifest samples not in the allele table (", length(missing), "): ", shortlist(missing))
+shape <- switch(MODE,
+                merge = "merged into one row each",
+                best_coverage = paste0("best run kept of ", nrow(ranks), " sample-run rows"),
+                keep_dups = paste0(nrow(ranks), " sample-run rows, IDs ending in _a, _b, ..."),
+                paste0(nrow(ranks), " sample-run rows"))
+say("Samples in more than one run: ", uniqueN(ranks$SampleID), " (", shape, ")")
+say("Depth_Read_Loci = loci with more than ", format(MIN_DEPTH), " reads")
+say("Written: ", OUT_FILE)
+```
+
+```{r}
+#| label: show-screening
+DT::datatable(screen, rownames = FALSE, filter = "top", options = list(pageLength = 20, scrollX = TRUE))
+```
+
+## 6. Allele table
+
+This step runs only when `OUT_ALLELES_FILE` is set. The table has the same columns as the input. Samples in only one run, controls, and IDs not in the manifest are unchanged.
+
+| Option | Change in the allele table |
+|------------------------------------|------------------------------------|
+| `BEST_COVERAGE` | Rows from the other runs are removed |
+| `KEEP_DUPS` | All rows are kept, and IDs get `_a`, `_b`, ... |
+| `MERGE` | One row per sample, locus and `asv`. Reads are summed and `norm.reads.locus` and `n.alleles` recalculated. `Run` lists all runs. |
+
+```{r}
+#| label: allele-table
+if (is.null(OUT_ALLELES_FILE)) {
+  if (MODE != "none")
+    say("Note: only the screening table was written; set OUT_ALLELES_FILE to also write the allele table.")
+} else {
+  cn <- list(id = id_col, locus = locus_col, reads = reads_col, asv = asv_col, run = run_col,
+             nida = find_col(al, "nida"), allele = find_col(al, "allele"),
+             norm = find_col(al, "norm.reads.locus"), n_alleles = find_col(al, "n.alleles"))
+  out <- resolve_alleles(al, cn, links, repeated_rows, ranks, MODE)
+  write_table(out, OUT_ALLELES_FILE)
+  say("Allele table rows: ", nrow(al), " in, ", nrow(out), " out")
+  runs_out <- trimws(if (is.null(run_col)) out[[id_col]] else out[[run_col]])
+  n_runs <- data.table(s = normalise_id(out[[id_col]]), r = runs_out)[, .(n = uniqueN(r)), by = s]
+  left <- sort(n_runs[n > 1, s], method = "radix")
+  if (length(left))
+    say("Note: ", length(left), " IDs are still in more than one run in the allele table, because they were not ",
+        "screened (controls or not in the manifest): ", shortlist(left))
+  say("Written: ", OUT_ALLELES_FILE)
+}
+```

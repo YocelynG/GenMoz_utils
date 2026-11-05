@@ -49,7 +49,7 @@ they are only reported)
 Rows of samples in only one run, and of IDs not screened, are unchanged.
 
 Example
-  python3 screen_duplicate_runs.py \\
+  python3 screen_sample_repetitions.py \\
       --alleles allele_table.txt --manifest manifest.csv \\
       --out duplicate_runs_screening.tsv \\
       --best_coverage TRUE --out-alleles allele_table_best_run.txt
@@ -318,7 +318,8 @@ def main():
         stats = stats.assign(New_SampleID=stats.SampleID + ("_" + stats.Rank.map(letter)).where(stats.N_Runs > 1, ""))
         cols.append("New_SampleID")
     stats["Total_Reads"] = stats.Total_Reads.round().astype("int64")
-    stats[cols].to_csv(a.out, sep=separator(a.out), index=False)
+    # Files are read as latin-1 and written as latin-1, so every byte is kept as it was
+    stats[cols].to_csv(a.out, sep=separator(a.out), index=False, encoding="latin-1")
 
     if run:
         print(f"Allele table: {len(ids)} IDs in {alleles.Run.nunique()} runs")
@@ -352,7 +353,7 @@ def main():
                                "norm": find_col(al, None, ["norm.reads.locus"], ""),
                                "n_alleles": find_col(al, None, ["n.alleles"], "")},
                           links, repeated_rows, ranks, mode)
-    out.to_csv(a.out_alleles, sep=separator(a.out_alleles), index=False)
+    out.to_csv(a.out_alleles, sep=separator(a.out_alleles), index=False, encoding="latin-1")
     print(f"Allele table rows: {len(al)} in, {len(out)} out")
     runs_out = (out[run] if run else out[sid]).str.strip()
     left = pd.DataFrame({"s": out[sid].map(normalise_id), "r": runs_out}).groupby("s").r.nunique()

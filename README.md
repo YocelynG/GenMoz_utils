@@ -244,6 +244,25 @@ Rscript run_coi.R \
 Rscript run_coi.R --input allele_table.txt --output Coi_output --threshold 0.98
 ```
 
+### 4. Estimate allele frequencies and Heterozygosis using MOIRE
+
+Run MOIRE analyses on all allele_*.txt files in a directory.
+
+Input files may be tab- or comma-separated, with either header format:
+"SampleID","Locus","PseudoCIGAR","Reads","WSAF"
+
+**Use the COI estimates from `run_MOIRE.R`:**
+
+```
+Rscript run_MOIRE.R [input_directory] [output_directory] [threads]
+```
+
+**Running in the workstation**:
+
+```bash
+nohup Rscript run_MOIRE.R [input_directory] [output_directory] 10 & 
+```
+
 ### 4. Estimate pairwise relatedness using Dcifer
 
 Run Dcifer to estimate allele frequencies from the data and  also calculates a naive COI, or use allele frequencies and COI previously calculated  
