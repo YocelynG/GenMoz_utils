@@ -1,6 +1,6 @@
 # Genomic Surveillance utils
 
-Command-line scripts for processing malaria amplicon allele tables: split samples into metadata-defined groups, estimate read-based **complexity of infection (COI)**, calculate allele frequencies and heterozygosity **in populations** using [MOIRE] (https://github.com/EPPIcenter/moire), and **between-host genetic relatedness (IBD)** using [Dcifer](https://github.com/EPPIcenter/dcifer) through [PGEcore](https://github.com/PlasmoGenEpi/PGEcore).
+Command-line scripts for processing malaria amplicon allele tables: split samples into metadata-defined groups, estimate read-based **complexity of infection (COI)**, calculate allele frequencies and heterozygosity **in populations** using [MOIRE](https://github.com/EPPIcenter/moire), and **between-host genetic relatedness (IBD)** using [Dcifer](https://github.com/EPPIcenter/dcifer) through [PGEcore](https://github.com/PlasmoGenEpi/PGEcore).
 
 ## Scripts
 
