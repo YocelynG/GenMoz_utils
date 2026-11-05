@@ -1,6 +1,6 @@
-# Genomic Surveillance utilities: population splitting, COI and Dcifer relatedness
+# Genomic Surveillance utils
 
-Command-line scripts for processing malaria amplicon allele tables: split samples into metadata-defined groups, estimate read-based **complexity of infection (COI)**, and calculate **between-host genetic relatedness (IBD)** using [Dcifer](https://github.com/EPPIcenter/dcifer) through [PGEcore](https://github.com/PlasmoGenEpi/PGEcore).
+Command-line scripts for processing malaria amplicon allele tables: split samples into metadata-defined groups, estimate read-based **complexity of infection (COI)**, calculate allele frequencies and heterozygosity **in populations** using [MOIRE] (https://github.com/EPPIcenter/moire), and **between-host genetic relatedness (IBD)** using [Dcifer](https://github.com/EPPIcenter/dcifer) through [PGEcore](https://github.com/PlasmoGenEpi/PGEcore).
 
 ## Scripts
 
@@ -33,10 +33,10 @@ Use a terminal with **Python 3** and **R** (accessible as `python3` and `Rscript
 - R
 - R packages: `optparse`, `dplyr`, `tibble` (`tibble` is used explicitly in the code)
 
-### Prerequisites: `run_dcifer.R`
+### Prerequisites: `run_dcifer.R` and `run_MOIRE.R`
 
 - R (compatible with your installed `dcifer` version)
-- R packages: `optparse`, `dplyr`, `tibble`, `PGEcore`, `dcifer`, `foreach`, `iterators`, `doParallel`, `parallelly`
+- R packages: `optparse`, `dplyr`, `tibble`, `PGEcore`, `dcifer`, `moire`, `foreach`, `iterators`, `doParallel`, `parallelly`
 - Multiple CPU workers if using `--threads` greater than 1
 
 
@@ -92,7 +92,7 @@ Column names are matched ignoring case, so `SampleID` = `sampleID` and `Reads` =
 - **Required columns:** the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`), `locus` and `reads`.
 - **Optional columns:** `Run`, `asv`, `NIDA`, `norm.reads.locus` and `n.alleles`.
 
-** `--manifest`:** file containing the sample names and a column with the batch information (library or plate name)
+**`--manifest`:** file containing the sample names and a column with the batch information (library or plate name)
 - **Columns:** the ID (`SampleID`, `sample_id`, `sample_name`, `sample`, `NIDA` or `id`) and the run (`Run` or `Batch`; `Run` is used if both are present).
 - **No header:** the first column is the ID and the second is the run.
 
