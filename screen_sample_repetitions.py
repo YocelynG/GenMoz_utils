@@ -1,75 +1,67 @@
 #!/usr/bin/env python3
-"""Find samples that were sequenced in more than one run in one or more allele
-tables, and optionally resolve them.
+"""Find samples that are in more than one allele table (sequenced at different
+moments), and optionally resolve them.
 
-Inputs
-  --alleles   One or more allele tables (.csv, .tsv, .txt, optionally .gz), or
+Input
+  --alleles   Two or more allele tables (.csv, .tsv, .txt, optionally .gz), or
               folders: in a folder, every file whose name starts with "allele"
               (allele_table_run1.txt, allele_data.tsv.gz, ...) is read. All the
               tables are combined into one. Each needs a sample ID column
               (SampleID, sample_id, sample_name or sample), a locus column and a
               reads column. Column names are matched ignoring case.
-              The Run column tells which run each row comes from. Without it,
-              each allele table counts as one run; with a single allele table,
-              each sequencing ID (e.g. N2076817-1_S3_L001) counts as its own run.
-              If only some tables have a Run column, the others get their file
-              name in it.
-  --manifest  Required. One or more manifests (.csv or .tsv) with a SampleID
-              or sample_name column and a SampleType column. Only IDs with
-              SampleType = sample are screened; controls (positive, negative)
-              and IDs not in the manifest are left unchanged.
 
-Sample IDs are standardised before matching, so "N2076817_1_S12_L001",
-"N2076817-1_S3_L001", "N2076817_1_S64__HFS23_NextSEQ01_271025", "N2076817-1"
-and "2076817.1" are all the same sample (2076817.1). A "-0"/"_0" suffix means
-no decimal.
+Origin of each sample: the allele table it comes from. A sample found in more
+than one allele table is a repeat.
+
+Only samples are screened: IDs that standardise to a number, such as
+"N2076817_1_S12_L001", "N2076817-1_S3_L001", "N2076817_1_S64__HFS23_NextSEQ01_271025",
+"N2076817-1" and "2076817.1", which are all the same sample (2076817.1; a
+"-0"/"_0" suffix means no decimal). Other IDs are controls (N3D7-10K,
+NDd2_100k, ...): they are not screened and are left unchanged.
 
 Screening table (--out)
-  SampleID, Run, Allele_Table, Raw_SampleID, N_Runs, Total_Reads, Total_Loci,
+  SampleID, Allele_Table, Raw_SampleID, N_Runs, Total_Reads, Total_Loci,
   Avg_Reads_per_Locus, Depth_Read_Loci, Best_Run
 
-  Allele_Table         allele table(s) the sample's rows in that run come from
+  Allele_Table         allele table the sample's rows come from
+  Raw_SampleID         ID(s) as written in that table
+  N_Runs               number of allele tables the sample is in
   Total_Reads          sum of reads over all alleles
   Total_Loci           loci with at least one read
   Avg_Reads_per_Locus  Total_Reads / Total_Loci
   Depth_Read_Loci      loci whose reads (summed over alleles) are > --min-depth
-  Best_Run             "yes" for the run with most Depth_Read_Loci per sample
+  Best_Run             "yes" for the table with most Depth_Read_Loci per sample
                        (ties broken by Total_Reads)
 
-  Rows of the same sample are listed together, best run first.
+  Rows of the same sample are listed together, best table first.
 
-What to do with samples in more than one run (use at most one; by default
-they are only reported)
+What to do with samples in more than one allele table (use at most one; by
+default they are only reported)
   --merge TRUE          one row per sample: reads are added up per locus (and
-                        per asv in the allele table) across its runs. Run and
-                        Raw_SampleID list all runs, best first, separated by
-                        ";", and Best_Run holds the name of the best run.
-                        Allele_Table lists the tables of all its runs.
-  --best_coverage TRUE  keep only the best run of each sample.
-  --keep_dups TRUE      keep every run, adding _a, _b, ... to the IDs (a = best
-                        run), right after _S*/_S*_L001 or else at the end:
+                        per asv in the allele table) across its tables.
+                        Allele_Table and Raw_SampleID list all of them, best
+                        first, separated by ";", and Best_Run holds the best table.
+  --best_coverage TRUE  keep only the best table of each sample.
+  --keep_dups TRUE      keep every table, adding _a, _b, ... to the IDs (a = best
+                        table), right after _S*/_S*_L001 or else at the end:
                         N2076817-1_S3_L001_a, N2076817_1_S64_b__HFS23_NextSEQ01_271025,
                         2076817.1_a. The letter goes in the sample ID column and
                         in NIDA if the table has it. The screening table gets a
                         New_SampleID column.
 
 --out-alleles FILE also writes one allele table, all input tables combined,
-with that option applied. Rows of samples in only one run, and of IDs not
-screened, are unchanged. An Allele_Table column is added (or kept, if the
-tables already have one) with the name of the table each row comes from;
-merged rows list the tables of all the sample's runs, best run first.
+with that option applied. Rows of samples in only one table, and of controls,
+are unchanged. An Allele_Table column is added (or kept, if the tables already
+have one) with the name of the table each row comes from; merged rows list the
+tables of the sample, best first.
 
 Examples
+  python3 screen_sample_repetitions.py --alleles all_runs/ \\
+      --out screening.tsv --best_coverage TRUE --out-alleles allele_table_best_run.txt
   python3 screen_sample_repetitions.py \\
-      --alleles allele_table.txt --manifest manifest.csv \\
-      --out duplicate_runs_screening.tsv \\
-      --best_coverage TRUE --out-alleles allele_table_best_run.txt
+      --alleles allele_table_run1.txt allele_table_run2.txt --out screening.tsv
 
-  # Several tables, or a folder with them (write the outputs outside that folder)
-  python3 screen_sample_repetitions.py \\
-      --alleles allele_table_run1.txt allele_table_run2.txt --manifest manifest.csv ...
-  python3 screen_sample_repetitions.py \\
-      --alleles allele_tables/ --manifest manifest.csv ...
+  Write the outputs outside the folder of the allele tables.
 """
 import argparse
 import gzip
@@ -81,7 +73,8 @@ import pandas as pd
 
 # Column names are matched ignoring case (SampleID = sampleID, Reads = reads)
 ID_NAMES = ["sampleid", "sample_id", "sample_name", "sample"]
-TYPE_NAMES = ["sampletype", "sample_type"]
+# Standardised IDs of samples (2076817, 2076817.1); any other ID is a control
+SAMPLE_ID_PATTERN = r"\d+(\.\d+)?"
 MODES = ("merge", "best_coverage", "keep_dups")
 # Files read from a folder given to --alleles
 ALLELE_FILE_PATTERN = re.compile(r"^[Aa]llele.*\.(txt|tsv|csv)(\.gz)?$")
@@ -127,8 +120,12 @@ def shortlist(values, n=20):
 
 
 def join_unique(values):
-    """'a', 'b;a', 'c' -> 'a;b;c' (first appearance order)."""
-    return ";".join(dict.fromkeys(x for v in values for x in v.split(";")))
+    """'a', 'b;a', 'c', '' -> 'a;b;c' (first appearance order, empty values left out)."""
+    return ";".join(dict.fromkeys(x for v in values for x in v.split(";") if x))
+
+
+def join_sorted(values):
+    return ";".join(sorted(set(values)))
 
 
 def summarise(per_locus, keys, min_depth):
@@ -206,7 +203,6 @@ def read_alleles(files):
 
     Column names that differ only in case (sampleID, SampleID) get the first table's spelling.
     Allele_Table holds the name of each row's table (kept where the tables already have one).
-    If only some tables have a Run column, the others get their table name in it.
     """
     tables, spelling = [], {}
     for path in files:
@@ -217,44 +213,25 @@ def read_alleles(files):
             spelling.setdefault(c.lower(), c)
         tables.append(df)
     table_col = spelling.get(TABLE_COL.lower(), TABLE_COL)
-    run = spelling.get("run")
     for df, name in zip(tables, table_names(files)):
         if table_col in df.columns:
             df[table_col] = df[table_col].where(df[table_col].str.strip() != "", name)
         else:
             df[table_col] = name
-        if run and run not in df.columns:
-            df[run] = name
     # Columns missing from a table are left empty
     return pd.concat(tables, ignore_index=True).fillna(""), table_col
 
 
-def read_manifests(paths):
-    """Standardised ID and SampleType (lower case) of every row of the manifests."""
-    parts = []
-    for path in paths:
-        df = read_table(path)
-        sid, typ = find_col(df, None, ID_NAMES, ""), find_col(df, None, TYPE_NAMES, "")
-        if not (sid and typ):
-            sys.exit(f"{path}: the manifest needs a SampleID (or sample_name) column and a SampleType column. "
-                     f"Columns: {list(df.columns)}")
-        part = pd.DataFrame({"raw": df[sid].str.strip(), "SampleType": df[typ].str.strip().str.lower()})
-        parts.append(part[part.raw != ""])
-    man = pd.concat(parts).drop_duplicates()
-    man["SampleID"] = man.raw.map(normalise_id)
-    return man
-
-
 def resolve_alleles(al, c, links, repeated, ranks, mode):
-    """Allele table with each sample in several runs merged, cut to its best run, or relabelled.
+    """Allele table with each sample in several tables merged, cut to its best table, or relabelled.
 
     c       column names in al: id, locus, reads, asv, run, nida, allele, norm, n_alleles, table
-    links   row (index in al), SampleID and Run of every allele row of a screened sample
+    links   row (index in al), SampleID and Allele_Table of every allele row of a sample
     repeated  rows left out when adding up reads (same sequence listed twice)
-    ranks   SampleID, Run and Rank (0 = best run) of the samples in several runs
+    ranks   SampleID, Allele_Table and Rank (0 = best) of the samples in several tables
     """
-    dup = links.merge(ranks, on=["SampleID", "Run"])
-    if dup.empty:   # no sample in more than one run
+    dup = links.merge(ranks, on=["SampleID", "Allele_Table"])
+    if dup.empty:   # no sample in more than one table
         return al
     if mode == "best_coverage":
         return al.drop(index=dup.row[dup.Rank > 0])
@@ -268,7 +245,7 @@ def resolve_alleles(al, c, links, repeated, ranks, mode):
         return out
 
     # merge: one row per sample, locus and sequence; the other columns come
-    # from the best run that has that sequence
+    # from the best table that has that sequence
     locus, reads = c["locus"], c["reads"]
     keys = ["_sid", locus, c["asv"]]
     use = dup[~dup.row.isin(repeated)]
@@ -289,15 +266,15 @@ def resolve_alleles(al, c, links, repeated, ranks, mode):
     if c["n_alleles"]:
         m[c["n_alleles"]] = m.groupby(["_sid", locus])._total.transform("size").astype(str)
     m[c["id"]] = m._sid.map(part[part._rank == 0].groupby("_sid")[c["id"]].first())
-    if c["run"]:
-        m[c["run"]] = m._sid.map(ranks.sort_values("Rank").groupby("SampleID").Run.agg(";".join))
-    # Tables of all the sample's runs, best run first
+    # Tables (and runs) of the sample, best first
     m[c["table"]] = m._sid.map(part.groupby("_sid", sort=False)[c["table"]].agg(join_unique))
+    if c["run"]:
+        m[c["run"]] = m._sid.map(part[c["run"]].str.strip().groupby(part._sid, sort=False).agg(join_unique))
     if c["allele"]:
         clash = m.duplicated(["_sid", locus, c["allele"]], keep=False)
         if clash.any():
             print(f"Note: {m[clash].groupby(['_sid', locus, c['allele']]).ngroups} allele names are used for two "
-                  "different sequences in the same merged sample, because each run numbers its alleles "
+                  "different sequences in the same merged sample, because each table numbers its alleles "
                   "separately. Match alleles by asv, not by allele name.")
 
     rest = al.drop(index=dup.row)
@@ -310,17 +287,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--alleles", nargs="+", required=True, metavar="PATH",
                    help="allele table(s), or folder(s) whose allele* files are all read; combined into one table")
-    p.add_argument("--manifest", nargs="+", required=True, metavar="FILE",
-                   help="manifest(s) with SampleID or sample_name and SampleType; only SampleType = sample is screened")
     p.add_argument("--out", required=True, help="screening table (.csv for commas, anything else is tab-separated)")
     p.add_argument("--min-depth", type=float, default=100, help="reads a locus must exceed for Depth_Read_Loci (default 100)")
-    p.add_argument("--all", action="store_true", help="also list samples sequenced in only one run")
+    p.add_argument("--all", action="store_true", help="also list samples in only one allele table")
     p.add_argument("--merge", type=true_false, default=False, metavar="TRUE|FALSE",
-                   help="TRUE: one row per sample, adding up its runs (default FALSE)")
+                   help="TRUE: one row per sample, adding up its tables (default FALSE)")
     p.add_argument("--best_coverage", "--best-coverage", dest="best_coverage", type=true_false, default=False,
-                   metavar="TRUE|FALSE", help="TRUE: keep only the best run of each sample (default FALSE)")
+                   metavar="TRUE|FALSE", help="TRUE: keep only the best table of each sample (default FALSE)")
     p.add_argument("--keep_dups", "--keep-dups", dest="keep_dups", type=true_false, default=False,
-                   metavar="TRUE|FALSE", help="TRUE: keep every run, adding _a, _b, ... to the IDs (default FALSE)")
+                   metavar="TRUE|FALSE", help="TRUE: keep every table, adding _a, _b, ... to the IDs (default FALSE)")
     p.add_argument("--out-alleles", "--out_alleles", dest="out_alleles", metavar="FILE",
                    help="also write the allele table with --merge, --best_coverage or --keep_dups applied")
     p.add_argument("--alleles-id-col", help="sample ID column in --alleles (default: sampleID or sample_name)")
@@ -334,9 +309,8 @@ def main():
         p.error("--out-alleles needs --merge TRUE, --best_coverage TRUE or --keep_dups TRUE")
     outputs = [os.path.abspath(x) for x in (a.out, a.out_alleles) if x]
     files = allele_files(a.alleles)
-    inputs = {os.path.abspath(x) for x in [*files, *a.manifest]}
-    if inputs & set(outputs) or len(set(outputs)) < len(outputs):
-        p.error("--out and --out-alleles must be different from each other and from the input files "
+    if {os.path.abspath(f) for f in files} & set(outputs) or len(set(outputs)) < len(outputs):
+        p.error("--out and --out-alleles must be different from each other and from the allele tables "
                 "(including the allele* files in a folder given to --alleles)")
 
     print(f"Allele tables read ({len(files)}): {shortlist(files)}")
@@ -349,65 +323,58 @@ def main():
     if not (sid and locus and reads):
         sys.exit(f"--alleles needs sample ID, locus and reads columns. Columns: {list(al.columns)}")
     if a.out_alleles and mode == "merge" and not asv:
-        sys.exit("--merge TRUE with --out-alleles needs an asv column in --alleles to match alleles across runs "
-                 "(allele names are numbered separately in each run).")
+        sys.exit("--merge TRUE with --out-alleles needs an asv column in --alleles to match alleles across tables "
+                 "(allele names are numbered separately in each table).")
 
-    alleles = pd.DataFrame({"row": al.index, "raw": al[sid].str.strip(), "table": al[table_col],
-                            "locus": al[locus], "reads": pd.to_numeric(al[reads], errors="coerce").fillna(0)})
-    # Without a Run column, each allele table is one run; with a single table, each
-    # sequencing ID (e.g. N2076817-1_S3_L001) is its own run
+    # Origin of each row: the allele table it comes from
     n_tables = al[table_col].nunique()
-    run_source = run or (table_col if n_tables > 1 else sid)
-    alleles["Run"] = al[run_source].str.strip()
+    data = pd.DataFrame({"row": al.index, "raw": al[sid].str.strip(), "Allele_Table": al[table_col],
+                         "run": al[run].str.strip() if run else "", "locus": al[locus],
+                         "reads": pd.to_numeric(al[reads], errors="coerce").fillna(0)})
     if asv:
-        alleles["asv"] = al[asv]
-    alleles["SampleID"] = alleles.raw.map(normalise_id)
-    ids = set(alleles.SampleID)
+        data["asv"] = al[asv]
+    data["SampleID"] = data.raw.map(normalise_id)
+    # Only samples are screened; controls (N3D7-10K, NDd2_100k, ...) are left unchanged
+    is_sample = data.SampleID.str.fullmatch(SAMPLE_ID_PATTERN)
+    controls = sorted(set(data.SampleID[~is_sample]))
+    data = data[is_sample]
 
-    man = read_manifests(a.manifest)
-    samples = set(man.SampleID[man.SampleType == "sample"])
-    mixed = sorted(samples & set(man.SampleID[man.SampleType != "sample"]))
-    not_in_manifest = sorted(ids - set(man.SampleID))
-    data = alleles[alleles.SampleID.isin(samples)]
-
-    links = data[["row", "SampleID", "Run"]]
+    links = data[["row", "SampleID", "Allele_Table"]]
     repeated_rows = set()
     if asv:
         # The same sequence listed twice under two allele names would be counted twice
-        repeated = data.duplicated(["raw", "Run", "locus", "asv"])
+        repeated = data.duplicated(["raw", "Allele_Table", "run", "locus", "asv"])
         if repeated.any():
-            print(f"Note: ignored {repeated.sum()} repeated sequence rows (same sample, run, locus and asv).")
+            print(f"Note: ignored {repeated.sum()} repeated sequence rows (same sample, allele table, locus and asv).")
         repeated_rows = set(data.row[repeated])
         data = data[~repeated]
 
-    per_locus = data.groupby(["SampleID", "Run", "locus"], as_index=False).reads.sum()
-    stats = summarise(per_locus, ["SampleID", "Run"], a.min_depth)
-    names = data.groupby(["SampleID", "Run"]).agg(
-        Allele_Table=("table", lambda v: ";".join(sorted(set(v)))),
-        Raw_SampleID=("raw", lambda v: ";".join(sorted(set(v)))),
-        n_raw=("raw", "nunique")).reset_index()
-    stats = stats.merge(names, on=["SampleID", "Run"])
-    n_shared_run = stats.SampleID[stats.n_raw > 1].nunique()
-    stats["N_Runs"] = stats.groupby("SampleID").Run.transform("nunique")
-    stats = stats.sort_values(["SampleID", "Depth_Read_Loci", "Total_Reads", "Run"],
+    per_locus = data.groupby(["SampleID", "Allele_Table", "locus"], as_index=False).reads.sum()
+    stats = summarise(per_locus, ["SampleID", "Allele_Table"], a.min_depth)
+    raw_ids = data.groupby(["SampleID", "Allele_Table"]).raw.agg(join_sorted).rename("Raw_SampleID")
+    stats = stats.merge(raw_ids.reset_index(), on=["SampleID", "Allele_Table"])
+    # Samples sequenced twice inside one table (two sequencing IDs or runs): their reads are added up
+    inside = data.drop_duplicates(["SampleID", "Allele_Table", "raw", "run"]).groupby(["SampleID", "Allele_Table"]).size()
+    n_inside = inside[inside > 1].index.get_level_values("SampleID").nunique()
+    stats["N_Runs"] = stats.groupby("SampleID").Allele_Table.transform("nunique")
+    stats = stats.sort_values(["SampleID", "Depth_Read_Loci", "Total_Reads", "Allele_Table"],
                               ascending=[True, False, False, True])
     stats["Rank"] = stats.groupby("SampleID").cumcount()
     stats["Best_Run"] = (stats.Rank == 0).map({True: "yes", False: "no"})
-    ranks = stats.loc[stats.N_Runs > 1, ["SampleID", "Run", "Rank"]]
+    ranks = stats.loc[stats.N_Runs > 1, ["SampleID", "Allele_Table", "Rank"]]
     if not a.all:
         stats = stats[stats.N_Runs > 1]
 
-    cols = ["SampleID", "Run", "Allele_Table", "Raw_SampleID", "N_Runs", "Total_Reads", "Total_Loci",
+    cols = ["SampleID", "Allele_Table", "Raw_SampleID", "N_Runs", "Total_Reads", "Total_Loci",
             "Avg_Reads_per_Locus", "Depth_Read_Loci", "Best_Run"]
     if mode == "merge":
-        # Add up each sample's reads per locus over its runs, then recount
+        # Add up each sample's reads per locus over its tables, then recount
         pooled = per_locus[per_locus.SampleID.isin(stats.SampleID)]
         pooled = pooled.groupby(["SampleID", "locus"], as_index=False).reads.sum()
-        runs = stats.groupby("SampleID", sort=False).agg(
-            Run=("Run", ";".join), Allele_Table=("Allele_Table", join_unique),
-            Raw_SampleID=("Raw_SampleID", ";".join),
-            N_Runs=("Run", "size"), Best_Run=("Run", "first")).reset_index()
-        stats = summarise(pooled, ["SampleID"], a.min_depth).merge(runs, on="SampleID").sort_values("SampleID")
+        merged = stats.groupby("SampleID", sort=False).agg(
+            Allele_Table=("Allele_Table", join_unique), Raw_SampleID=("Raw_SampleID", ";".join),
+            N_Runs=("Allele_Table", "size"), Best_Run=("Allele_Table", "first")).reset_index()
+        stats = summarise(pooled, ["SampleID"], a.min_depth).merge(merged, on="SampleID").sort_values("SampleID")
     elif mode == "best_coverage":
         stats = stats[stats.Rank == 0]
     elif mode == "keep_dups":
@@ -417,31 +384,20 @@ def main():
     # Files are read as latin-1 and written as latin-1, so every byte is kept as it was
     stats[cols].to_csv(a.out, sep=separator(a.out), index=False, encoding="latin-1")
 
-    if run:
-        print(f"Allele table: {len(ids)} IDs in {alleles.Run.nunique()} runs")
-    elif n_tables > 1:
-        print(f"Allele table: {len(ids)} IDs; no Run column, so each of the {n_tables} allele tables "
-              "counts as one run")
-    else:
-        print(f"Allele table: {len(ids)} IDs; no Run column, so each sequencing ID counts as its own run")
-    print(f"Screened: {len(ids & samples)} samples (SampleType = sample) | not screened: "
-          f"{len(ids & (set(man.SampleID) - samples))} controls or other types, {len(not_in_manifest)} not in the manifest")
-    if not_in_manifest:
-        print(f"Not in the manifest, so not screened ({len(not_in_manifest)}): {shortlist(not_in_manifest)}")
-    if mixed:
-        print(f"Note: {len(mixed)} IDs are 'sample' in one manifest row and another type in another; "
-              f"screened as samples: {shortlist(mixed)}")
-    missing = sorted(samples - ids)
-    if missing:
-        print(f"Manifest samples not in the allele table ({len(missing)}): {shortlist(missing)}")
-    n_dup = ranks.SampleID.nunique()
+    print(f"Allele tables: {n_tables} | samples: {links.SampleID.nunique()} | "
+          f"controls (not screened, left unchanged): {len(controls)}")
+    if n_tables == 1:
+        print("Note: only one allele table, so no sample can be in more than one. Give two or more tables, "
+              "or a folder with them.")
+    if controls:
+        print(f"Controls: {shortlist(controls)}")
     shape = {"merge": "merged into one row each",
-             "best_coverage": f"best run kept of {len(ranks)} sample-run rows",
-             "keep_dups": f"{len(ranks)} sample-run rows, IDs ending in _a, _b, ..."}.get(mode, f"{len(ranks)} sample-run rows")
-    print(f"Samples in more than one run: {n_dup} ({shape})")
-    if n_shared_run:
-        print(f"Note: {n_shared_run} samples have more than one sequencing ID in the same run; their reads "
-              "are added up as one (see Raw_SampleID).")
+             "best_coverage": "only the best allele table of each kept",
+             "keep_dups": "all kept, IDs ending in _a, _b, ... (a = best)"}.get(mode, "listed in the screening table")
+    print(f"Samples in more than one allele table: {ranks.SampleID.nunique()} ({shape})")
+    if n_inside:
+        print(f"Note: {n_inside} samples are more than once in the same allele table (two sequencing IDs or runs); "
+              "their reads are added up as one (see Raw_SampleID).")
     print(f"Depth_Read_Loci = loci with more than {a.min_depth:g} reads")
     print(f"Written: {a.out}")
 
@@ -449,20 +405,14 @@ def main():
         if mode:
             print("Note: only the screening table was written; add --out-alleles FILE to also write the allele table.")
         return
-    nida = find_col(al, None, ["nida"], "--alleles NIDA")
-    out = resolve_alleles(al, {"id": sid, "locus": locus, "reads": reads, "asv": asv, "run": run, "nida": nida,
+    out = resolve_alleles(al, {"id": sid, "locus": locus, "reads": reads, "asv": asv, "run": run,
+                               "nida": find_col(al, None, ["nida"], ""),
                                "allele": find_col(al, None, ["allele"], ""),
                                "norm": find_col(al, None, ["norm.reads.locus"], ""),
                                "n_alleles": find_col(al, None, ["n.alleles"], ""), "table": table_col},
                           links, repeated_rows, ranks, mode)
     out.to_csv(a.out_alleles, sep=separator(a.out_alleles), index=False, encoding="latin-1")
     print(f"Allele table rows: {len(al)} in, {len(out)} out")
-    runs_out = out[run_source].str.strip()
-    left = pd.DataFrame({"s": out[sid].map(normalise_id), "r": runs_out}).groupby("s").r.nunique()
-    left = sorted(left[left > 1].index)
-    if left:
-        print(f"Note: {len(left)} IDs are still in more than one run in the allele table, because they were not "
-              f"screened (controls or not in the manifest): {shortlist(left)}")
     print(f"Written: {a.out_alleles}")
 
 
