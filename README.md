@@ -6,7 +6,7 @@ Command-line scripts for processing malaria amplicon allele tables: split sample
 
 | Script | Purpose | Input | Main output |
 | --- | --- | --- | --- |
-| `screen_sample_repetitions.py` | Finds samples sequenced in more than one run and keep only the best sample among the duplicates | Allele table + Batch file | `allele_table` |
+| `screen_sample_repetitions.py` | Finds samples sequenced in more than one run and keep only the best sample among the duplicates | One or more allele tables (or a directory of `allele*` files) + manifest | Screening table and one combined allele table |
 | `split_allele_table_by_metadata.py` | Divide a single allele table by a metadata variable (e.g., province, district or year) | Allele table + sample metadata | `allele_table_<group>_filtered.txt` per group |
 | `run_coi.R` | Estimate read-based COI from the number of alleles required to cover a selected fraction of reads | One allele table or a directory | `<input_stem>_COI_Table.txt` |
 | `run_dcifer.R` | Estimate pairwise between-host relatedness with Dcifer | Allele table(s); optional COI, allele frequencies and/or metadata | `<input_stem>_Dcifer_IBD_Results.txt` and reproducible intermediate files |
@@ -82,34 +82,34 @@ Metadata should have one row per sample.
 
 ### 1. `screen_sample_repetitions.py`
 
-Finds samples sequenced in more than one run, reports their depth in each run, and can write an allele table with those samples merged, cut to their best run, or renamed.
+Finds samples sequenced in more than one run, reports their depth in each run, and can write an allele table with those samples merged, cut to their best run, or renamed. It reads one allele table, several, or a directory of them; several tables are combined and checked together.
 
 Column names are matched ignoring case, so `SampleID` = `sampleID` and `Reads` = `reads`.
 
 **Inputs**
 
-**`--alleles`:** the allele table (`.txt`, `.tsv`, `.csv`, optionally `.gz`).
+**`--alleles`:** one or more allele tables (`.txt`, `.tsv`, `.csv`, optionally `.gz`), or directories. In a directory, every file whose name starts with `allele` is read (e.g. `allele_table_run1.txt`, `allele_data.tsv.gz`). All the tables are combined into one.
 - **Required columns:** the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`), `locus` and `reads`.
 - **Optional columns:** `Run`, `asv`, `NIDA`, `norm.reads.locus` and `n.alleles`.
+- **Runs:** the `Run` column tells which run each row comes from. Without it, each allele table counts as one run; with a single allele table, each sequencing ID (e.g. `N2076817-1_S3_L001`) counts as its own run. If only some tables have a `Run` column, the others get their file name in it.
+- **Outputs:** write them outside the directory of the allele tables, or a later run will read an old output as one more table.
 
-**`--manifest`:** file containing the sample names and a column with the batch information (library or plate name)
-- **Columns:** the ID (`SampleID`, `sample_id`, `sample_name`, `sample`, `NIDA` or `id`) and the run (`Run` or `Batch`; `Run` is used if both are present).
-- **No header:** the first column is the ID and the second is the run.
+**`--manifest`:** one or more pipeline manifests with the sample ID (`SampleID`, `sample_id`, `sample_name` or `sample`) and `SampleType` columns. Only IDs with `SampleType = sample` are screened; controls and IDs not in a manifest are left unchanged.
 
 ```
-SampleID        Batch
-2076817.1       Lib1
-2076817.1       Lib2
+SampleID,SampleType
+2076817.1,sample
+N3D7-10K,positive
 ```
 
 ## Options
 
 | Option | Description |
 |---|---|
-| `--alleles FILE` | Allele table (required) |
-| `--manifest FILE` | Samples and batch file (required) |
+| `--alleles PATH [PATH ...]` | Allele table(s), or directories of `allele*` files (required) |
+| `--manifest FILE [FILE ...]` | Manifest(s) with `SampleID` and `SampleType` (required) |
 | `--out FILE` | Screening table (required) |
-| `--out-alleles FILE` | Also write the allele table with one of the three options below applied |
+| `--out-alleles FILE` | Also write one allele table, all inputs combined, with one of the three options below applied |
 | `--best_coverage TRUE` | Keep only the best run of each sample |
 | `--keep_dups TRUE` | Keep every run and add `_a`, `_b`, ... to the IDs (`a` = best run) |
 | `--merge TRUE` | Combine each sample's runs into one, adding up the reads |
@@ -133,6 +133,16 @@ python3 screen_sample_repetitions.py --alleles allele_table.txt --manifest manif
     --out screening.tsv --best_coverage TRUE --out-alleles allele_table_best_run.txt
 ```
 
+**Several allele tables**, listed or as a directory; the output allele table is a single file
+
+```bash
+python3 screen_sample_repetitions.py --alleles allele_table_run1.txt allele_table_run2.txt \
+    --manifest manifest.csv --out screening.tsv --best_coverage TRUE --out-alleles allele_table_best_run.txt
+
+python3 screen_sample_repetitions.py --alleles allele_tables/ --manifest manifest.csv \
+    --out screening.tsv --best_coverage TRUE --out-alleles allele_table_best_run.txt
+```
+
 ## Outputs
 
 **Screening table (`--out`):** one row per sample and run, best run first.
@@ -140,7 +150,8 @@ python3 screen_sample_repetitions.py --alleles allele_table.txt --manifest manif
 | Column | Meaning |
 |---|---|
 | `SampleID` | Standardised ID |
-| `Run` | Sequencing run |
+| `Run` | Sequencing run (without a `Run` column: the allele table, or the sequencing ID if there is only one table) |
+| `Allele_Table` | Allele table(s) the sample's rows in that run come from |
 | `Raw_SampleID` | ID as written in the allele table |
 | `N_Runs` | Number of runs the sample is in |
 | `Total_Reads` | Reads over all loci |
@@ -150,15 +161,15 @@ python3 screen_sample_repetitions.py --alleles allele_table.txt --manifest manif
 | `Best_Run` | `yes` / `no` (with `--merge`: name of the best run) |
 | `New_SampleID` | Only with `--keep_dups`: the ID with its letter |
 
-With `--best_coverage`, only the best row of each sample is kept. With `--merge`, each sample has one row, and its runs are listed best first, separated by `;`.
+With `--best_coverage`, only the best row of each sample is kept. With `--merge`, each sample has one row, and its runs and allele tables are listed best first, separated by `;`.
 
-**Allele table (`--out-alleles`):** Remove duplicate samples, keeping only one or renaming duplicates
+**Allele table (`--out-alleles`):** Remove duplicate samples, keeping only one or renaming duplicates. It is a single file with all the input tables combined, with the same columns as the input plus `Allele_Table`: the file name of the table each row comes from (its path if two tables have the same file name).
 
 | Option | Change in the allele table |
 |---|---|
 | `--best_coverage` | Sample with the best read depth coverage is retained |
 | `--keep_dups` | All duplicate samples are kept, and IDs get `_a`, `_b`, ... |
-| `--merge` | Reads are summed and `norm.reads.locus` and `n.alleles` recalculated. `Run` lists all runs. 
+| `--merge` | Reads are summed and `norm.reads.locus` and `n.alleles` recalculated. `Run` and `Allele_Table` list all runs and tables, best first. |
 
 
 ### 2. Split allele tables by metadata
