@@ -2,9 +2,15 @@
 
 # Run MOIRE analyses on all allele_*.txt files in a directory.
 #
-# Input files may be tab- or comma-separated, with either header format:
-#   sampleID  locus  pseudo_cigar  reads  norm.reads.locus
-#   "SampleID","Locus","PseudoCIGAR","Reads","WSAF"
+# Input files may be tab- or comma-separated. Accepted column names:
+#   SampleID:     SampleID, sampleID, sample_name
+#   Locus:        Locus, locus, target_name
+#   PseudoCIGAR:  PseudoCIGAR, pseudo_cigar, pseudocigar_unmasked
+#   Reads:        Reads, reads
+#   WSAF:         WSAF, norm.reads.locus, norm.Reads.Locus (optional)
+#
+# The WSAF column is optional. If it is absent, it is calculated as
+# Reads / total Reads for each sample and locus.
 #
 # Usage:
 #   Rscript run_moire.R [input_directory] [output_directory] [threads]
@@ -90,16 +96,18 @@ for (pop in pops) {
       check.names = FALSE
     )
 
-    # Supported header formats, mapped to the internal column names:
-    #   sampleID, locus, pseudo_cigar, reads, norm.reads.locus
-    #   "SampleID","Locus","PseudoCIGAR","Reads","WSAF"
+    # Accepted header names for each internal column. If a file has more
+    # than one alias for the same column, the first one listed is used.
+    # norm.Reads.Locus is optional: MOIRE does not use it, and it is
+    # calculated from Reads when absent.
     column_aliases <- list(
-      SampleID = c("SampleID", "sampleID"),
-      Locus = c("Locus", "locus"),
-      PseudoCIGAR = c("PseudoCIGAR", "pseudo_cigar"),
+      SampleID = c("SampleID", "sampleID", "sample_name"),
+      Locus = c("Locus", "locus", "target_name"),
+      PseudoCIGAR = c("PseudoCIGAR", "pseudo_cigar", "pseudocigar_unmasked"),
       Reads = c("Reads", "reads"),
       norm.Reads.Locus = c("WSAF", "norm.reads.locus", "norm.Reads.Locus")
     )
+    optional_columns <- "norm.Reads.Locus"
 
     matched_columns <- vapply(
       column_aliases,
@@ -110,9 +118,12 @@ for (pop in pops) {
       character(1)
     )
 
-    if (anyNA(matched_columns)) {
+    missing_required <- is.na(matched_columns) &
+      !names(matched_columns) %in% optional_columns
+
+    if (any(missing_required)) {
       missing_columns <- vapply(
-        column_aliases[is.na(matched_columns)],
+        column_aliases[missing_required],
         paste,
         character(1),
         collapse = " or "
@@ -125,15 +136,30 @@ for (pop in pops) {
       )
     }
 
+    matched_columns <- matched_columns[!is.na(matched_columns)]
+
     moire_input <- moire_input %>%
       select(all_of(matched_columns)) %>%
       mutate(
         SampleID = as.character(SampleID),
         Locus = as.character(Locus),
         PseudoCIGAR = as.character(PseudoCIGAR),
-        Reads = as.numeric(Reads),
-        norm.Reads.Locus = as.numeric(norm.Reads.Locus)
+        Reads = as.numeric(Reads)
       )
+
+    if ("norm.Reads.Locus" %in% names(matched_columns)) {
+      moire_input$norm.Reads.Locus <- as.numeric(moire_input$norm.Reads.Locus)
+    } else {
+      message("  No WSAF/norm.reads.locus column found; calculating it from Reads.")
+      moire_input <- moire_input %>%
+        group_by(SampleID, Locus) %>%
+        mutate(
+          locus_total = sum(Reads, na.rm = TRUE),
+          norm.Reads.Locus = ifelse(locus_total > 0, Reads / locus_total, NA_real_)
+        ) %>%
+        ungroup() %>%
+        select(-locus_total)
+    }
 
     # Remove masking from the pseudo-CIGAR strings.
     moire_input$PseudoCIGAR <- gsub(
