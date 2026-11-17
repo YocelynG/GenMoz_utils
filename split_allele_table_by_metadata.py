@@ -8,6 +8,10 @@ allele-table rows whose SampleID belongs to a sample with that value are written
 
 Notes:
   - Comma- or tab-separated files are detected automatically (any extension).
+  - The sample ID column is detected in each file separately, with the same aliases
+    as run_MOIRE.R / run_dcifer.R: SampleID / sampleID / sample_id / sample_name
+    (case, "_" and "." are ignored; if several are present, SampleID-like wins).
+    --sample-col overrides this and must then exist in both files.
   - --variable year: if the metadata has no "year" column, the year is taken from
     the "date" column (first 4-digit number, e.g. 3/17/2022 -> 2022).
   - Allele-table samples absent from the metadata (e.g. lab controls) are not
@@ -30,6 +34,29 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+
+# Normalized sample ID aliases in order of preference, as in run_MOIRE.R / run_dcifer.R.
+SAMPLE_ALIASES = ("sampleid", "samplename")
+
+
+def normalize_column_name(name: str) -> str:
+    """Lower case, keep only letters and digits (SampleID / sample_id -> sampleid)."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def find_sample_col(df: pd.DataFrame, label: str, explicit: str | None) -> str:
+    """Return the sample ID column of df: --sample-col if given, else the first alias found."""
+    if explicit is not None:
+        if explicit not in df.columns:
+            sys.exit(f"ERROR: column '{explicit}' not found in {label}. Columns: {list(df.columns)}")
+        return explicit
+    normalized = [normalize_column_name(c) for c in df.columns]
+    for alias in SAMPLE_ALIASES:
+        if alias in normalized:
+            return df.columns[normalized.index(alias)]
+    sys.exit(f"ERROR: no sample ID column (SampleID or sample_name) found in {label}. "
+             f"Columns: {list(df.columns)}")
 
 
 def safe_name(value: str) -> str:
@@ -57,8 +84,9 @@ def parse_args() -> argparse.Namespace:
                    help="Metadata variable to split by (e.g. province, district, us, year)")
     p.add_argument("--outdir", type=Path, default=None,
                    help="Output directory (default: allele_tables_by_<variable> next to --input)")
-    p.add_argument("--sample-col", default="SampleID",
-                   help="Sample ID column shared by both files (default: %(default)s)")
+    p.add_argument("--sample-col", default=None,
+                   help="Sample ID column name, used in both files (default: detect "
+                        "SampleID / sampleID / sample_id / sample_name in each file)")
     return p.parse_args()
 
 
@@ -74,9 +102,9 @@ def main() -> None:
     # Read every field as text and keep it untouched so outputs match the input byte-for-byte.
     alleles = pd.read_csv(args.input, sep=in_sep, dtype=str, keep_default_na=False)
 
-    for name, df in (("metadata", meta), ("allele table", alleles)):
-        if args.sample_col not in df.columns:
-            sys.exit(f"ERROR: column '{args.sample_col}' not found in {name}. Columns: {list(df.columns)}")
+    meta_col = find_sample_col(meta, "metadata", args.sample_col)
+    allele_col = find_sample_col(alleles, "allele table", args.sample_col)
+    print(f"Sample ID column: allele table '{allele_col}', metadata '{meta_col}'")
 
     if args.variable not in meta.columns:
         if args.variable == "year" and "date" in meta.columns:
@@ -85,16 +113,16 @@ def main() -> None:
         else:
             sys.exit(f"ERROR: variable '{args.variable}' not found in metadata. Columns: {list(meta.columns)}")
 
-    dup = meta[args.sample_col][meta[args.sample_col].duplicated()]
+    dup = meta[meta_col][meta[meta_col].duplicated()]
     if not dup.empty:
-        sys.exit(f"ERROR: duplicated {args.sample_col} in metadata: {sorted(dup.unique())}")
+        sys.exit(f"ERROR: duplicated {meta_col} in metadata: {sorted(dup.unique())}")
 
     groups = meta[args.variable].str.strip()
-    missing = meta.loc[groups.isna() | (groups == ""), args.sample_col]
+    missing = meta.loc[groups.isna() | (groups == ""), meta_col]
     if not missing.empty:
         print(f"WARNING: {len(missing)} metadata samples have no '{args.variable}' value and are skipped: "
               f"{sorted(missing)}")
-    sample_to_group = dict(zip(meta[args.sample_col], groups))
+    sample_to_group = dict(zip(meta[meta_col], groups))
 
     # Make sure two different values don't collapse onto the same filename.
     file_names: dict[str, str] = {}
@@ -104,12 +132,12 @@ def main() -> None:
             sys.exit(f"ERROR: '{value}' and '{file_names[fname]}' both map to {fname}")
         file_names[fname] = value
 
-    sample_group = alleles[args.sample_col].map(sample_to_group)
-    unassigned = sorted(alleles.loc[sample_group.isna(), args.sample_col].unique())
+    sample_group = alleles[allele_col].map(sample_to_group)
+    unassigned = sorted(alleles.loc[sample_group.isna(), allele_col].unique())
     if unassigned:
         print(f"NOTE: {len(unassigned)} allele-table samples are not in the metadata and are excluded: "
               f"{', '.join(unassigned)}")
-    no_alleles = sorted(set(meta[args.sample_col]) - set(alleles[args.sample_col]))
+    no_alleles = sorted(set(meta[meta_col]) - set(alleles[allele_col]))
     if no_alleles:
         print(f"WARNING: {len(no_alleles)} metadata samples have no rows in the allele table: "
               f"{', '.join(no_alleles)}")
@@ -125,10 +153,10 @@ def main() -> None:
             print(f"{value:<45}{0:>8}{0:>10}  (no allele data, not written)")
             continue
         subset.to_csv(outdir / fname, sep=in_sep, index=False, quoting=in_quoting, lineterminator="\n")
-        print(f"{value:<45}{subset[args.sample_col].nunique():>8}{len(subset):>10}  {fname}")
+        print(f"{value:<45}{subset[allele_col].nunique():>8}{len(subset):>10}  {fname}")
 
     written = sample_group.notna() & sample_group.ne("")
-    print(f"\nTotal: {alleles.loc[written, args.sample_col].nunique()} samples, {int(written.sum())} rows "
+    print(f"\nTotal: {alleles.loc[written, allele_col].nunique()} samples, {int(written.sum())} rows "
           f"written across {len(file_names)} groups")
 
 

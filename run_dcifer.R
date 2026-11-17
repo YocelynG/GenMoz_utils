@@ -14,10 +14,13 @@
 #   the header line). Filenames must start with "allele"
 #   (case-insensitive) when a directory is given.
 #
-# Required allele table columns (same aliases as run_moire.R):
-#   SampleID / sampleID / sample_id
-#   Locus / locus
-#   PseudoCIGAR / pseudo_cigar
+# Required allele table columns (same aliases as run_moire.R;
+# case, "_" and "." are ignored, so sample_id also works):
+#   SampleID / sampleID / sample_name
+#   Locus / locus / target_name
+#   PseudoCIGAR / pseudo_cigar / pseudocigar_unmasked
+# If a table has more than one alias for the same column, the
+# first one listed is used.
 #
 # Other columns (Reads, WSAF, ...) are ignored: Dcifer only uses
 # allele presence/absence.
@@ -44,7 +47,8 @@
 #                       Omitted: naive COI, the 2nd-highest allele
 #                       count across loci (as dcifer::getCOI).
 #
-#   -m, --metadata      Metadata file with SampleID and <pop_col>.
+#   -m, --metadata      Metadata file with SampleID (or sample_name)
+#                       and <pop_col>.
 #                       When given, allele frequencies are estimated
 #                       per population and both within- and
 #                       between-population pairs are run. Cannot be
@@ -357,8 +361,16 @@ read_delim_auto <- function(path) {
 # Helper function: find a column by alias
 # ============================================================
 
+# Aliases are given normalized and in order of preference, as in
+# run_moire.R: when a file has several, the first listed wins.
+
+sample_aliases <- c("sampleid", "samplename")
+locus_aliases <- c("locus", "targetname")
+cigar_aliases <- c("pseudocigar", "pseudocigarunmasked")
+
 find_column <- function(df, aliases, label, path) {
-  matches <- which(normalize_column_name(colnames(df)) %in% aliases)
+  matches <- match(aliases, normalize_column_name(colnames(df)))
+  matches <- matches[!is.na(matches)]
 
   if (length(matches) == 0L) {
     stop(
@@ -457,9 +469,15 @@ for (pop in pops) {
 
     allele_raw <- read_delim_auto(pop)
 
-    sample_col <- find_column(allele_raw, "sampleid", "SampleID", pop)
-    locus_col <- find_column(allele_raw, "locus", "Locus", pop)
-    cigar_col <- find_column(allele_raw, "pseudocigar", "PseudoCIGAR", pop)
+    sample_col <- find_column(
+      allele_raw, sample_aliases, "SampleID or sample_name", pop
+    )
+    locus_col <- find_column(
+      allele_raw, locus_aliases, "Locus or target_name", pop
+    )
+    cigar_col <- find_column(
+      allele_raw, cigar_aliases, "PseudoCIGAR or pseudocigar_unmasked", pop
+    )
 
     message(
       "  Detected column mapping:\n",
@@ -494,7 +512,7 @@ for (pop in pops) {
       metadata_raw <- read_delim_auto(metadata_path)
 
       meta_sample_col <- find_column(
-        metadata_raw, "sampleid", "SampleID", metadata_path
+        metadata_raw, sample_aliases, "SampleID or sample_name", metadata_path
       )
 
       if (!pop_col %in% colnames(metadata_raw)) {
